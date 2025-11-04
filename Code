@@ -1,0 +1,445 @@
+# student_monitoring_beep_only.py
+"""
+Student monitoring script (beep-only alerts + improved blink handling)
+
+Changes made:
+- Removed MP3 / playsound usage. Uses winsound.Beep on Windows; fallback to terminal bell.
+- Replaced the previous crude EAR with a standard EAR formula using MediaPipe eye landmarks.
+- Added short-blink allowance (short eye closures won't count as distraction).
+- Long eye closure, gaze away, head pose, or phone presence still trigger distraction.
+- Voice/MP3 has been removed — beep plays once per distraction event (no repeated spam).
+- All other logging & session summary preserved.
+
+Usage: place and run. Press 'q' to quit.
+"""
+
+import os
+import time
+from datetime import datetime
+import threading
+import platform
+
+import cv2
+import numpy as np
+import mediapipe as mp
+from ultralytics import YOLO
+
+# -------------------------
+# USER SETTINGS (your choices)
+# -------------------------
+WEBCAM_INDEX = 0
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 720
+
+YOLO_IMGSZ = 640
+YOLO_SKIP_FRAMES = 2
+
+FPS_EST = 22.5
+
+# Distraction must be continuous for ~1.3 seconds (moderate strictness)
+DISTRACTION_SECONDS_REQUIRED = 1.3
+DISTRACTION_FRAMES_REQUIRED = max(1, int(round(DISTRACTION_SECONDS_REQUIRED * FPS_EST)))
+
+# Focus regained smoothing: must be focused for these many frames before resetting alerts
+FOCUSED_FRAMES_TO_RESET = max(1, int(round(0.35 * FPS_EST)))
+
+# Phone detection smoothing
+PHONE_FRAMES_REQUIRED = max(1, int(round(0.5 * FPS_EST)))
+
+# Blink handling
+# Max frames a blink can last and still be considered a blink (not a distraction)
+BLINK_MAX_SECONDS = 0.25
+BLINK_MAX_FRAMES = max(1, int(round(BLINK_MAX_SECONDS * FPS_EST)))
+
+# EAR threshold: tuneable, typical values 0.15-0.22 (lower = stricter)
+EAR_CLOSED_THRESHOLD = 0.18
+
+# gaze/head thresholds (kept as you had)
+GAZE_X_THRESHOLD = 0.30
+GAZE_Y_THRESHOLD = 0.40
+YAW_THRESHOLD = 25.0
+PITCH_THRESHOLD = 25.0
+
+# beep params
+BEEP_FREQUENCY = 1500  # Hz
+BEEP_DURATION_MS = 600  # milliseconds
+
+LOG_DIR = r"C:\Users\rushi\Desktop\Monitoring_Logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+USERNAME_FULL = "Srushti Narwade"
+LOG_NAME_FIRST = "Srushti"
+
+# -------------------------
+# Initialize models
+# -------------------------
+print("Loading YOLOv8 (may download weights)...")
+yolo_model = YOLO("yolov8n.pt")  # auto-download if missing
+
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(static_image_mode=False,
+                                  max_num_faces=1,
+                                  refine_landmarks=True,
+                                  min_detection_confidence=0.5,
+                                  min_tracking_confidence=0.5)
+
+mp_drawing = mp.solutions.drawing_utils
+
+# Iris landmark ranges (MediaPipe)
+LEFT_IRIS_IDX = list(range(468, 473))
+RIGHT_IRIS_IDX = list(range(473, 478))
+
+# Head pose indices
+MP_NOSE_TIP = 1
+MP_CHIN = 152
+MP_LEFT_EYE_OUTER = 33
+MP_RIGHT_EYE_OUTER = 263
+MP_LEFT_MOUTH = 61
+MP_RIGHT_MOUTH = 291
+
+# simple generic 3D model points for solvePnP
+MODEL_POINTS_3D = np.array([
+    (0.0, 0.0, 0.0),
+    (0.0, -63.6, -12.5),
+    (-43.3, 32.7, -26.0),
+    (43.3, 32.7, -26.0),
+    (-28.9, -28.9, -24.1),
+    (28.9, -28.9, -24.1)
+], dtype=np.float64)
+
+# camera matrix estimate
+focal_length = FRAME_WIDTH
+center = (FRAME_WIDTH / 2, FRAME_HEIGHT / 2)
+camera_matrix = np.array([[focal_length, 0, center[0]],
+                          [0, focal_length, center[1]],
+                          [0, 0, 1]], dtype=np.float64)
+
+# -------------------------
+# Helper functions
+# -------------------------
+# beep helper: use winsound on Windows, else terminal bell fallback
+def beep_once():
+    try:
+        if platform.system() == "Windows":
+            import winsound
+            winsound.Beep(BEEP_FREQUENCY, BEEP_DURATION_MS)
+        else:
+            # fallback: print terminal bell character (may or may not beep)
+            print("\a", end="", flush=True)
+    except Exception:
+        print("\a", end="", flush=True)
+
+def play_beep_daemon():
+    t = threading.Thread(target=beep_once, daemon=True)
+    t.start()
+
+def euclidean(a, b):
+    a = np.array(a, dtype=np.float32)
+    b = np.array(b, dtype=np.float32)
+    return np.linalg.norm(a - b)
+
+def eye_aspect_ratio_from_landmarks(landmarks, indices, w, h):
+    """
+    Compute EAR given 6 eye landmark indices in the order:
+    p1, p2, p3, p4, p5, p6 where:
+    EAR = (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
+    We will map indices accordingly for MediaPipe points supplied.
+    """
+    pts = []
+    for idx in indices:
+        lm = landmarks[idx]
+        pts.append((lm.x * w, lm.y * h))
+    pts = np.array(pts, dtype=np.float32)
+    if pts.shape[0] != 6:
+        # fallback to bounding-based ratio if not enough points
+        ys = pts[:, 1]
+        xs = pts[:, 0]
+        vert = (ys.max() - ys.min())
+        horiz = (xs.max() - xs.min()) + 1e-6
+        return float(vert / horiz)
+    p1, p2, p3, p4, p5, p6 = pts
+    vert1 = euclidean(p2, p6)
+    vert2 = euclidean(p3, p5)
+    horiz = euclidean(p1, p4) + 1e-6
+    ear = (vert1 + vert2) / (2.0 * horiz)
+    return float(ear)
+
+def get_iris_center(landmarks, indices, w, h):
+    pts = []
+    for idx in indices:
+        lm = landmarks[idx]
+        pts.append((int(lm.x * w), int(lm.y * h)))
+    pts = np.array(pts)
+    cx = int(np.mean(pts[:, 0]))
+    cy = int(np.mean(pts[:, 1]))
+    return (cx, cy), pts
+
+def bounding_box_from_points(pts):
+    xs = pts[:,0]; ys = pts[:,1]
+    return (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+
+def solve_head_pose(landmarks, w, h):
+    try:
+        image_points = []
+        for idx in [MP_NOSE_TIP, MP_CHIN, MP_LEFT_EYE_OUTER, MP_RIGHT_EYE_OUTER, MP_LEFT_MOUTH, MP_RIGHT_MOUTH]:
+            lm = landmarks[idx]
+            image_points.append((lm.x * w, lm.y * h))
+        image_points = np.array(image_points, dtype=np.float64)
+        success, rot_vec, trans_vec = cv2.solvePnP(MODEL_POINTS_3D, image_points, camera_matrix, np.zeros((4,1)), flags=cv2.SOLVEPNP_ITERATIVE)
+        if not success:
+            return None
+        rot_mat, _ = cv2.Rodrigues(rot_vec)
+        pose_mat = cv2.hstack((rot_mat, trans_vec))
+        _, _, _, _, _, _, euler = cv2.decomposeProjectionMatrix(pose_mat)
+        pitch, yaw, roll = float(euler[0]), float(euler[1]), float(euler[2])
+        return pitch, yaw, roll
+    except Exception:
+        return None
+
+def is_gaze_centered(iris_center, eye_box):
+    x_min, y_min, x_max, y_max = eye_box
+    w = max(1, x_max - x_min)
+    h = max(1, y_max - y_min)
+    rel_x = (iris_center[0] - x_min) / w - 0.5
+    rel_y = (iris_center[1] - y_min) / h - 0.5
+    return (abs(rel_x) <= GAZE_X_THRESHOLD) and (abs(rel_y) <= GAZE_Y_THRESHOLD)
+
+# -------------------------
+# Eye landmark indices for EAR (6 points each)
+# These are common MediaPipe landmark indices mapped to a 6-point EAR formula.
+# Left eye: [33, 160, 158, 133, 153, 144]
+# Right eye: [263, 387, 385, 362, 380, 373]
+# (The mapping order is p1..p6 for the formula.)
+LEFT_EAR_IDX = [33, 160, 158, 133, 153, 144]
+RIGHT_EAR_IDX = [263, 387, 385, 362, 380, 373]
+
+# -------------------------
+# Main loop variables & camera init
+# -------------------------
+cap = cv2.VideoCapture(WEBCAM_INDEX, cv2.CAP_DSHOW)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+
+frame_idx = 0
+start_time = time.time()
+session_start_dt = datetime.now()
+
+# smoothing counters
+consec_not_focused_frames = 0
+consec_focused_frames = 0
+
+phone_consec_frames = 0
+phone_visible_seconds = 0.0
+phone_last_seen_ts = None
+
+distraction_alerted = False
+distraction_count = 0
+
+focused_frames = 0
+total_frames = 0
+
+yolo_frame_counter = 0
+
+# blink/eye-closed counters
+closed_eyes_frames = 0
+
+print("Starting monitoring. Press 'q' to quit.")
+print(f"Distraction frames required for alert: {DISTRACTION_FRAMES_REQUIRED}")
+print(f"Phone frames required to consider phone present: {PHONE_FRAMES_REQUIRED}")
+print("Beep-only alerts are enabled (no MP3 required).")
+
+try:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to read webcam frame.")
+            break
+        frame_idx += 1
+        total_frames += 1
+
+        # YOLO phone detection (run every YOLO_SKIP_FRAMES frames)
+        phone_detected_in_frame = False
+        yolo_frame_counter += 1
+        if yolo_frame_counter >= YOLO_SKIP_FRAMES:
+            yolo_frame_counter = 0
+            small = cv2.resize(frame, (YOLO_IMGSZ, int(YOLO_IMGSZ * frame.shape[0] / frame.shape[1])))
+            results = yolo_model(small, imgsz=YOLO_IMGSZ, device=0, verbose=False)
+            for r in results:
+                for box in r.boxes:
+                    cls_id = int(box.cls[0])
+                    label = yolo_model.names.get(cls_id, str(cls_id)).lower()
+                    if "phone" in label or "cell" in label or "mobile" in label:
+                        phone_detected_in_frame = True
+                        break
+                if phone_detected_in_frame:
+                    break
+
+        # phone smoothing
+        if phone_detected_in_frame:
+            phone_consec_frames += 1
+            if phone_last_seen_ts is None:
+                phone_last_seen_ts = time.time()
+        else:
+            if phone_consec_frames >= PHONE_FRAMES_REQUIRED:
+                # accumulate visible seconds
+                if phone_last_seen_ts:
+                    phone_visible_seconds += (time.time() - phone_last_seen_ts)
+                phone_last_seen_ts = None
+            phone_consec_frames = 0
+
+        phone_detected = (phone_consec_frames >= PHONE_FRAMES_REQUIRED)
+
+        # MediaPipe face & gaze
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        res = face_mesh.process(rgb)
+
+        focused = False
+        pitch = yaw = roll = None
+
+        eyes_open = True  # default assume open unless proven otherwise
+        gaze_centered = True
+
+        if res.multi_face_landmarks:
+            lm = res.multi_face_landmarks[0].landmark
+
+            hp = solve_head_pose(lm, FRAME_WIDTH, FRAME_HEIGHT)
+            if hp:
+                pitch, yaw, roll = hp
+
+            left_iris_center, left_pts = get_iris_center(lm, LEFT_IRIS_IDX, FRAME_WIDTH, FRAME_HEIGHT)
+            right_iris_center, right_pts = get_iris_center(lm, RIGHT_IRIS_IDX, FRAME_WIDTH, FRAME_HEIGHT)
+
+            # Eye boxes (for gaze)
+            left_eye_idxs_draw = [33, 133, 160, 159, 158, 144, 153]
+            right_eye_idxs_draw = [362, 263, 387, 386, 385, 373, 380]
+            left_eye_pts = np.array([[int(lm[i].x * FRAME_WIDTH), int(lm[i].y * FRAME_HEIGHT)] for i in left_eye_idxs_draw])
+            right_eye_pts = np.array([[int(lm[i].x * FRAME_WIDTH), int(lm[i].y * FRAME_HEIGHT)] for i in right_eye_idxs_draw])
+            left_box = bounding_box_from_points(left_eye_pts)
+            right_box = bounding_box_from_points(right_eye_pts)
+
+            # EAR using 6-point mapping
+            left_ear = eye_aspect_ratio_from_landmarks(lm, LEFT_EAR_IDX, FRAME_WIDTH, FRAME_HEIGHT)
+            right_ear = eye_aspect_ratio_from_landmarks(lm, RIGHT_EAR_IDX, FRAME_WIDTH, FRAME_HEIGHT)
+            avg_ear = (left_ear + right_ear) / 2.0
+
+            # eyes_open is simple threshold on avg EAR
+            eyes_open = (avg_ear > EAR_CLOSED_THRESHOLD)
+
+            # handle blink/tracking of closed-eyes frames
+            if not eyes_open:
+                closed_eyes_frames += 1
+            else:
+                # if eyes opened, reset closed counter
+                closed_eyes_frames = 0
+
+            # Allow short blinks: if closed_eyes_frames <= BLINK_MAX_FRAMES, treat as blink (not distraction)
+            short_blink_active = (0 < closed_eyes_frames <= BLINK_MAX_FRAMES)
+            long_eye_closure = (closed_eyes_frames > BLINK_MAX_FRAMES)
+
+            # gaze check
+            left_gaze_ok = is_gaze_centered(left_iris_center, left_box)
+            right_gaze_ok = is_gaze_centered(right_iris_center, right_box)
+            gaze_centered = left_gaze_ok and right_gaze_ok
+
+            # head pose check
+            head_ok = True
+            if yaw is not None and pitch is not None:
+                head_ok = (abs(yaw) <= YAW_THRESHOLD) and (abs(pitch) <= PITCH_THRESHOLD)
+
+            # final focused decision:
+            # - Not focused if long eye closure OR gaze not centered OR head not ok OR phone detected
+            # - But short blinks (short_blink_active) should not mark not-focused
+            focused = (not long_eye_closure) and eyes_open and gaze_centered and head_ok and (not phone_detected)
+
+            # draw indicators
+            cv2.circle(frame, left_iris_center, 3, (0,255,255), -1)
+            cv2.circle(frame, right_iris_center, 3, (0,255,255), -1)
+            cv2.rectangle(frame, (left_box[0], left_box[1]), (left_box[2], left_box[3]), (0,255,0), 1)
+            cv2.rectangle(frame, (right_box[0], right_box[1]), (right_box[2], right_box[3]), (0,255,0), 1)
+            mp_drawing.draw_landmarks(frame, res.multi_face_landmarks[0], mp_face_mesh.FACEMESH_TESSELATION,
+                                      mp_drawing.DrawingSpec(color=(80,110,10), thickness=1, circle_radius=1),
+                                      mp_drawing.DrawingSpec(color=(80,256,121), thickness=1, circle_radius=1))
+
+            # annotate EAR and blink info
+            cv2.putText(frame, f"EAR:{avg_ear:.2f}", (20,150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 2)
+            cv2.putText(frame, f"ClosedFrames:{closed_eyes_frames}", (20,180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,200), 1)
+
+        else:
+            # no face found -> not focused
+            focused = False
+
+        if focused:
+            focused_frames += 1
+            consec_not_focused_frames = 0
+            consec_focused_frames += 1
+        else:
+            consec_focused_frames = 0
+            # We only increase not-focused counter if it's not a short blink.
+            # short_blink_active variable exists only when face landmarks present
+            if 'short_blink_active' in locals() and short_blink_active:
+                # do NOT increment consec_not_focused_frames for short blinks
+                pass
+            else:
+                consec_not_focused_frames += 1
+
+        # If not focused for >= required frames -> mark distracted & alert (only once until refocus)
+        if consec_not_focused_frames >= DISTRACTION_FRAMES_REQUIRED and (not distraction_alerted):
+            # trigger beep
+            play_beep_daemon()
+            distraction_alerted = True
+            distraction_count += 1
+
+        # Reset distracted alert only after some focused frames
+        if distraction_alerted and consec_focused_frames >= FOCUSED_FRAMES_TO_RESET:
+            distraction_alerted = False
+
+        # Show UI
+        status_text = "FOCUSED ✅" if focused else "DISTRACTED 🚨"
+        color = (0,255,0) if focused else (0,0,255)
+        cv2.putText(frame, status_text, (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
+        cv2.putText(frame, f"Phone secs: {phone_visible_seconds:.1f}", (20,80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 2)
+        cv2.putText(frame, f"Distractions: {distraction_count}", (20,110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 2)
+        if phone_detected:
+            cv2.putText(frame, "PHONE DETECTED", (FRAME_WIDTH - 360, 60), cv2.FONT_HERSHEY_DUPLEX, 0.8, (0,0,255), 2)
+
+        cv2.imshow("Student Monitoring - Press q to quit", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            if phone_consec_frames >= PHONE_FRAMES_REQUIRED and phone_last_seen_ts is not None:
+                phone_visible_seconds += (time.time() - phone_last_seen_ts)
+                phone_last_seen_ts = None
+            break
+
+except KeyboardInterrupt:
+    print("Interrupted by user.")
+finally:
+    cap.release()
+    cv2.destroyAllWindows()
+
+    end_time = time.time()
+    duration = end_time - start_time
+    focus_percent = (focused_frames / total_frames * 100.0) if total_frames > 0 else 0.0
+
+    # prepare simple text log
+    session_dt_str = session_start_dt.strftime("%Y-%m-%d %H:%M:%S")
+    dur_min = int(duration // 60)
+    dur_sec = int(duration % 60)
+    log_lines = []
+    log_lines.append(f"Session Start: {session_dt_str}")
+    log_lines.append(f"User: {USERNAME_FULL}")
+    log_lines.append(f"Total Time: {dur_min} min {dur_sec} sec")
+    log_lines.append(f"Total Distractions: {distraction_count}")
+    log_lines.append(f"Phone Usage (seconds): {int(phone_visible_seconds)}")
+    log_lines.append(f"Focus Score: {focus_percent:.1f}%")
+
+    # save log (filename uses first name only)
+    timestamp = session_start_dt.strftime("%Y%m%d_%H%M%S")
+    logfile_name = f"session_{LOG_NAME_FIRST}_{timestamp}.txt"
+    logfile_path = os.path.join(LOG_DIR, logfile_name)
+    with open(logfile_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(log_lines))
+
+    print("\n===== SESSION SUMMARY =====")
+    print("\n".join(log_lines))
+    print(f"Log saved to: {logfile_path}")
+    print("===========================")
