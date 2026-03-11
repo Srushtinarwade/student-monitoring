@@ -43,6 +43,12 @@ class CameraStream:
         self.running = False
 
     def start(self):
+        self.running = True
+        
+    def stop(self):
+        self.running = False
+
+    def _init_tracking(self):
         logger.info("Starting camera stream...")
         self.cap = cv2.VideoCapture(config.WEBCAM_INDEX)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
@@ -53,21 +59,31 @@ class CameraStream:
         self.phone_det = PhoneDetector()
         self.alert = AlertManager()
         self.session = SessionTracker()
-        self.running = True
+        
+        self.consec_not_focused = 0
+        self.consec_focused = 0
+        self.distraction_count = 0
         
         live_stats["active"] = True
-        
-    def stop(self):
-        self.running = False
+        live_stats["focused"] = True
+        live_stats["phone_seconds"] = 0.0
+        live_stats["distractions"] = 0
+        live_stats["focus_score"] = 100.0
+
+    def _teardown_tracking(self):
         live_stats["active"] = False
         if self.cap:
             self.cap.release()
+            self.cap = None
         if self.face_det:
             self.face_det.close()
+            self.face_det = None
         
         if self.session and self.phone_det:
             phone_secs = self.phone_det.finalize()
             self.session.save_log(phone_secs)
+            self.session = None
+            self.phone_det = None
 
     def generate_frames(self):
         # We start inactive. Yield black frames until explicitly started.
@@ -80,9 +96,19 @@ class CameraStream:
         blank_yield = (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + blank_bytes + b'\r\n')
 
+        is_tracking = False
+
         try:
             while True:
-                if not self.running:
+                if self.running and not is_tracking:
+                    self._init_tracking()
+                    is_tracking = True
+                    
+                elif not self.running and is_tracking:
+                    self._teardown_tracking()
+                    is_tracking = False
+
+                if not is_tracking:
                     yield blank_yield
                     time.sleep(0.1)
                     continue
@@ -168,4 +194,5 @@ class CameraStream:
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
         finally:
-            self.stop()
+            if is_tracking:
+                self._teardown_tracking()

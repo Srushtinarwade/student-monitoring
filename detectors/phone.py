@@ -39,6 +39,7 @@ class PhoneDetector:
         self._consec_frames: int = 0
         self._last_seen_ts: float | None = None
         self._visible_seconds: float = 0.0
+        self._last_yolo_result: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -46,18 +47,22 @@ class PhoneDetector:
 
     def detect(self, frame: np.ndarray) -> PhoneStatus:
         """Run detection on *frame* and return the current `PhoneStatus`."""
-        phone_in_frame = False
-
+        
         self._skip_counter += 1
         if self._skip_counter >= config.YOLO_SKIP_FRAMES:
             self._skip_counter = 0
-            phone_in_frame = self._run_yolo(frame)
+            self._last_yolo_result = self._run_yolo(frame)
 
-        self._update_smoothing(phone_in_frame)
+        self._update_smoothing(self._last_yolo_result)
+
+        # Calculate live accumulated seconds so the UI updates smoothly
+        current_visible_secs = self._visible_seconds
+        if self._consec_frames >= config.PHONE_CONFIRM_FRAMES and self._last_seen_ts is not None:
+            current_visible_secs += (time.time() - self._last_seen_ts)
 
         return PhoneStatus(
             detected=self._consec_frames >= config.PHONE_CONFIRM_FRAMES,
-            visible_seconds=self._visible_seconds,
+            visible_seconds=current_visible_secs,
         )
 
     def finalize(self) -> float:
@@ -85,7 +90,8 @@ class PhoneDetector:
             for box in r.boxes:
                 cls_id = int(box.cls[0])
                 label = self._model.names.get(cls_id, str(cls_id)).lower()
-                if any(kw in label for kw in ("phone", "cell", "mobile")):
+                # COCO dataset label is usually 'cell phone'
+                if "phone" in label or "mobile" in label or label == "cell phone":
                     return True
         return False
 
