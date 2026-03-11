@@ -70,7 +70,7 @@ class SessionTracker:
         ]
 
     def save_log(self, phone_seconds: float) -> Path:
-        """Write the session log to disk and return the file path."""
+        """Write the session log to disk and database. Return text file path."""
         config.LOG_DIR.mkdir(parents=True, exist_ok=True)
 
         timestamp = self._start_dt.strftime("%Y%m%d_%H%M%S")
@@ -81,4 +81,15 @@ class SessionTracker:
         lines = self.get_summary_lines(phone_seconds)
         log_file.write_text("\n".join(lines), encoding="utf-8")
         logger.info("Session log saved to %s", log_file)
+        
+        # Also save to SQLite database for the web dashboard
+        from utils import database
+        database.init_db()
+        database.save_session(
+            self._start_time,
+            self.duration_seconds,
+            self._distraction_count,
+            phone_seconds,
+            self.focus_percent,
+        )
         return log_file

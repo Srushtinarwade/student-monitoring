@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Monitoring</title>
+    <!-- Modern font -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    
+    <div class="dashboard-container">
+        
+        <!-- Header -->
+        <header class="glass-panel">
+            <div class="logo">
+                <span class="emoji">👀</span>
+                <h1>Target <span class="accent">Focus</span></h1>
+            </div>
+            <div class="user-info">
+                <span>Monitoring user:</span>
+                <span class="username">{{ user }}</span>
+            </div>
+        </header>
+
+        <main class="dashboard-grid">
+            
+            <!-- Video Feed Panel -->
+            <section class="video-section glass-panel">
+                <h2>Live Feed</h2>
+                <div class="video-container">
+                    <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Webcam Feed">
+                    <!-- Status Overlay -->
+                    <div id="status-badge" class="status-badge">STANDBY</div>
+                </div>
+                
+                <!-- Controls -->
+                <div class="controls-panel">
+                    <button class="btn btn-primary" id="btn-start">
+                        ▶ Start Session
+                    </button>
+                    <button class="btn btn-danger" id="btn-stop" disabled>
+                        ■ Stop Session
+                    </button>
+                </div>
+            </section>
+
+            <!-- Live Stats Sidebar -->
+            <section class="stats-section glass-panel">
+                <h2>Live Stats</h2>
+                <div class="stat-card">
+                    <span class="stat-label">Current State</span>
+                    <span class="stat-value" id="val-state">Unknown</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Distractions</span>
+                    <span class="stat-value highlight" id="val-distractions">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Phone Seconds</span>
+                    <span class="stat-value highlight" id="val-phone">0.0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Focus Score</span>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="focus-progress" style="width: 100%;"></div>
+                    </div>
+                    <span class="stat-value" id="val-score">100%</span>
+                </div>
+                
+                <div class="camera-status" id="camera-status">
+                    <span class="pulse-dot"></span> Camera Active
+                </div>
+            </section>
+
+            <!-- History Panel -->
+            <section class="history-section glass-panel">
+                <div class="history-header">
+                    <h2>Session History</h2>
+                    <button id="refresh-btn" class="icon-btn">↻</button>
+                </div>
+                
+                <div class="table-container">
+                    <table id="history-table">
+                        <thead>
+                            <tr>
+                                <th>Date & Time</th>
+                                <th>Duration</th>
+                                <th>Distractions</th>
+                                <th>Phone Time</th>
+                                <th>Focus Score</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-body">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

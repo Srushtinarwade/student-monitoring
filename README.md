@@ -17,24 +17,31 @@ A real-time AI-based student monitoring system that tracks **eye gaze**, **head 
 
 ---
 
-## 🏗️ Project Structure
+## 📁 Repository Structure
+
+The project has been refactored into a highly modular, layered architecture:
 
 ```
 student-monitoring/
-├── main.py             # Entry point & main monitoring loop
-├── config.py           # All tuneable settings & thresholds
-├── alerts.py           # Cross-platform beep alerts
-├── session.py          # Session tracking & log persistence
-├── overlay.py          # OpenCV HUD rendering
-├── detectors/
-│   ├── __init__.py
-│   ├── face.py         # MediaPipe face mesh, EAR, gaze, blink handling
-│   ├── head_pose.py    # Head orientation via solvePnP
-│   └── phone.py        # YOLOv8 phone detection with smoothing
-├── pyproject.toml      # Project metadata & dependencies
+├── app.py                # Flask server, API & web routes
+├── config.py             # Global constants & tunable thresholds
+├── core/                 # Core Business Logic Layer
+│   ├── camera.py         # Main loop yielding webcam frames & state
+│   └── session.py        # Focus tracking & metric accumulation
+├── utils/                # Utility & Infrastructure Layer
+│   ├── alerts.py         # Cross-platform audio beeps
+│   ├── database.py       # SQLite connection & logging
+│   └── overlay.py        # OpenCV drawing / HUD rendering
+├── detectors/            # Machine Learning Models Layer
+│   ├── face.py           # MediaPipe Tasks API (Landmarks, Blinks)
+│   ├── head_pose.py      # OpenCV solvePnP (Pitch/Yaw)
+│   └── phone.py          # YOLOv8-nano (Object Detection)
+├── frontend/             # User Interface Layer
+│   ├── templates/        # HTML Dashboard structure
+│   └── static/           # Premium CSS and JS
+```├── pyproject.toml      # Project metadata & dependencies
 ├── .gitignore
 └── README.md
-```
 
 ### File & Folder Descriptions
 
