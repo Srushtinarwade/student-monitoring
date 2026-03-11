@@ -1,95 +1,164 @@
-# student-monitoring
+# 👀 Student Monitoring System
 
-# 👀 Student Monitoring System (Beep-Only Alerts)
-
-A real-time AI-based student monitoring system that tracks eye gaze, head pose, phone usage, and focus level using a webcam. When distraction is detected, the system plays a **beep alert** (no MP3 required). Designed for student self-monitoring during study sessions.
+A real-time AI-based student monitoring system that tracks **eye gaze**, **head pose**, **phone usage**, and **focus level** using a webcam. When distraction is detected, the system plays a **beep alert**. Designed for student self-monitoring during study sessions.
 
 ---
 
-## 📌 Features
+## ✨ Features
 
-### 🎯 Focus Detection
-- Tracks **eye openness (EAR)** to detect blinking vs. drowsiness
-- Monitors if eyes are pointed at the screen using **iris tracking**
-- **Head pose estimation** to detect if the student looks away
-- Short blinks are allowed – no false distraction counts
-
-### 📱 Phone Detection (YOLOv8)
-- Detects if a phone is present using YOLOv8
-- Uses smoothing to avoid false positives
-- Tracks total phone usage time during the session
-
-### 🔊 Alerts & Logging
-- **BEEP sound alert** only when distraction is confirmed
-- No repetitive sound spam
-- Creates a text **session log** with:
-  - Total distractions
-  - Phone usage time
-  - Focus score
-  - Session duration
+| Feature | How it works |
+|---------|-------------|
+| **Eye tracking** | EAR (Eye Aspect Ratio) detects blinks vs drowsiness |
+| **Gaze detection** | Iris tracking checks if eyes point at the screen |
+| **Head pose** | OpenCV `solvePnP` detects if the student looks away |
+| **Phone detection** | YOLOv8-nano with temporal smoothing avoids false positives |
+| **Beep alerts** | Cross-platform (Windows / macOS / Linux), fires once per distraction event |
+| **Session logging** | Text log with distractions, phone time, focus score & duration |
 
 ---
 
-## 🖥️ Tech Stack
+## 🏗️ Project Structure
 
-| Component | Library |
-|----------|----------|
-| Face Mesh & Eye Tracking | MediaPipe |
-| Object Detection (Phone) | YOLOv8 (Ultralytics) |
-| Head Pose Estimation | OpenCV + SolvePnP |
-| Beep Alerts | winsound / terminal bell |
-| Logging | Python text log |
+```
+student-monitoring/
+├── main.py             # Entry point & main monitoring loop
+├── config.py           # All tuneable settings & thresholds
+├── alerts.py           # Cross-platform beep alerts
+├── session.py          # Session tracking & log persistence
+├── overlay.py          # OpenCV HUD rendering
+├── detectors/
+│   ├── __init__.py
+│   ├── face.py         # MediaPipe face mesh, EAR, gaze, blink handling
+│   ├── head_pose.py    # Head orientation via solvePnP
+│   └── phone.py        # YOLOv8 phone detection with smoothing
+├── pyproject.toml      # Project metadata & dependencies
+├── .gitignore
+└── README.md
+```
+
+### File & Folder Descriptions
+
+| File / Folder | What it does |
+|---------------|-------------|
+| `main.py` | The app's entry point. Opens the webcam, runs the detection loop (capture → detect → evaluate focus → alert → render), and prints a session summary on exit. |
+| `config.py` | Stores every tuneable setting (EAR threshold, gaze limits, head pose limits, beep duration, timing windows). Override user-specific values via environment variables (`SM_USERNAME`, `SM_LOG_DIR`, `SM_WEBCAM_INDEX`). |
+| `alerts.py` | Plays a non-blocking beep when distraction is confirmed. Uses `winsound` on Windows, `afplay` on macOS, or a terminal bell on Linux — all through an `AlertManager` class with built-in debouncing. |
+| `session.py` | Tracks per-session metrics (focused frames, distraction count, duration) and writes a text log file with the session summary to the configured log directory. |
+| `overlay.py` | Handles all OpenCV drawing: face mesh visualization, iris centre dots, eye bounding boxes, and the on-screen HUD (focus status, phone time, distraction count). |
+| `detectors/` | A package containing the three detection modules: |
+| `detectors/face.py` | Uses MediaPipe FaceMesh to compute the Eye Aspect Ratio (EAR), track blinks vs. drowsiness, detect iris position, and check gaze direction. Returns a `FaceAnalysis` dataclass. |
+| `detectors/head_pose.py` | Estimates head orientation (pitch, yaw, roll) using OpenCV's `solvePnP` with 6 facial landmark points mapped to a 3D face model. |
+| `detectors/phone.py` | Runs YOLOv8-nano for phone detection with frame-skipping (for performance) and temporal smoothing (to avoid false positives). Tracks cumulative phone-visible time. |
+| `pyproject.toml` | Project metadata and dependency list — used by `pip install -e .` to install everything. |
+
+---
+
+## 🔄 How It Works
+
+1. **Webcam capture** — `main.py` opens the webcam and enters a frame-by-frame loop
+2. **Face analysis** — Each frame is passed to `FaceDetector` which computes EAR (are eyes open?), iris gaze (looking at screen?), and blink status (short blink or prolonged closure?)
+3. **Head pose check** — `HeadPoseEstimator` calculates pitch & yaw to see if the student is looking away
+4. **Phone detection** — `PhoneDetector` runs YOLOv8 every few frames to check for a phone, with smoothing to avoid false positives
+5. **Focus decision** — The student is considered **focused** only if: eyes are open (not a long closure), gaze is centred, head is facing forward, and no phone is detected
+6. **Alert** — If distraction is sustained for ~1.3 seconds, `AlertManager` plays a beep (once, not repeated). Alert resets after ~0.35 seconds of re-focusing
+7. **Session log** — On quit (`q`), a summary (duration, distractions, phone time, focus score) is printed and saved to disk
 
 ---
 
 ## 🚀 Getting Started
 
-### ✅ Requirements
+### Requirements
 
-- Python 3.8+
+- Python 3.9+
 - Webcam
-- Windows recommended (for beep sound)
+- Works on **Windows**, **macOS**, and **Linux**
 - GPU optional (CPU works fine)
 
-### 📦 Installation
+### Installation
 
 ```bash
-# 1. Create a virtual environment
+# 1. Clone the repository
+git clone https://github.com/Srushtinarwade/student-monitoring.git
+cd student-monitoring
+
+# 2. Create a virtual environment
 python -m venv .venv
-.venv\Scripts\activate  # For Windows
 
-# 2. Install dependencies
-pip install -r requirements.txt
-📂 Student-Monitoring-System/
-│── student_monitoring_beep_only.py
-│── requirements.txt
-│── README.md
-│── .gitignore
-└── Monitoring_Logs/ (auto-generated)
+# On macOS / Linux:
+source .venv/bin/activate
+# On Windows:
+# .venv\Scripts\activate
 
-| Parameter       | Rule                             |
-| --------------- | -------------------------------- |
-| Eye Open State  | EAR > threshold                  |
-| Blink Handling  | Short blinks ignored             |
-| Gaze Direction  | Eyes must face screen            |
-| Head Pose       | Pitch & yaw within allowed range |
-| Phone Detection | If phone seen, not focused       |
+# 3. Install the project
+pip install -e .
+```
 
-OUTPUT
+### Usage
+
+```bash
+# Run the monitoring system
+python main.py
+
+# Press 'q' in the OpenCV window to stop
+```
+
+### Configuration
+
+Override settings via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SM_USERNAME` | OS username | Name shown in session logs |
+| `SM_LOG_DIR` | `~/.student_monitoring/logs` | Where session logs are saved |
+| `SM_WEBCAM_INDEX` | `0` | Webcam device index |
+
+All other thresholds (EAR, gaze, head pose, timing) are in [`config.py`](config.py).
+
+---
+
+## 🎯 Detection Logic
+
+| Parameter | Rule |
+|-----------|------|
+| Eye Open State | EAR > threshold (default 0.18) |
+| Blink Handling | Short blinks (< 0.25s) are ignored |
+| Gaze Direction | Iris must be centred within eye bounding box |
+| Head Pose | Pitch & yaw must be within ±25° |
+| Phone Detection | YOLOv8-nano, confirmed after ~0.5s of visibility |
+| Distraction Alert | Triggered after ~1.3s of continuous distraction |
+
+---
+
+## 📊 Sample Output
+
+```
 ===== SESSION SUMMARY =====
+Session Start: 2025-11-04 15:34:03
 User: Srushti Narwade
-Total Time: 21 min 15 sec
-Total Distractions: 4
-Phone Usage: 13 sec
-Focus Score: 92.8%
+Total Time: 1 min 55 sec
+Total Distractions: 3
+Phone Usage (seconds): 0
+Focus Score: 63.8%
 ===========================
+```
 
-📌 Future Improvements
+---
 
-Add voice alerts using TTS
+## 📌 Future Improvements
 
-Add dashboard / graphs for focus analytics
+- Voice alerts using TTS
+- Dashboard / graphs for focus analytics
+- CSV log format for progress tracking
+- Multi-student support for classroom mode
 
-Store logs in CSV format for progress tracking
+---
 
-Multi-student support for classroom mode
+## 🛠️ Tech Stack
+
+| Component | Library |
+|-----------|---------|
+| Face mesh & eye tracking | [MediaPipe](https://google.github.io/mediapipe/) |
+| Object detection (phone) | [YOLOv8](https://docs.ultralytics.com/) (Ultralytics) |
+| Head pose estimation | OpenCV `solvePnP` |
+| Audio alerts | `winsound` / `afplay` / terminal bell |
+| Session logging | Python `pathlib` + text files |
