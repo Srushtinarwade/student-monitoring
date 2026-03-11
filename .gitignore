@@ -25,6 +25,9 @@ Thumbs.db
 # YOLO model weights (auto-downloaded)
 *.pt
 
+# MediaPipe model files (downloaded separately)
+*.task
+
 # Session logs (auto-generated)
 logs/
 

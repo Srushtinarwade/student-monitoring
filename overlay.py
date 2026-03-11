@@ -1,44 +1,31 @@
 """
 OpenCV overlay rendering for the monitoring window.
 
-Separates all ``cv2.putText`` / drawing logic from the main loop so the
-core monitoring logic stays clean.
+Draws face contours, iris markers, eye boxes, and HUD text using pure
+OpenCV — no dependency on ``mp.solutions.drawing_utils``.
 """
 
 from __future__ import annotations
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
-import config
-from detectors.face import FaceAnalysis
-
-_mp_drawing = mp.solutions.drawing_utils
-_mp_face_mesh = mp.solutions.face_mesh
-
-# Drawing specs for face mesh
-_MESH_TESSELATION_DRAWING = _mp_drawing.DrawingSpec(
-    color=(80, 110, 10), thickness=1, circle_radius=1
-)
-_MESH_CONTOUR_DRAWING = _mp_drawing.DrawingSpec(
-    color=(80, 256, 121), thickness=1, circle_radius=1
-)
+from detectors.face import FaceAnalysis, _FACE_OVAL
 
 
 def draw_face(frame: np.ndarray, face: FaceAnalysis) -> None:
-    """Draw face mesh, iris centres, and eye bounding boxes."""
-    if not face.detected or face.face_landmarks is None:
+    """Draw face contour, iris centres, and eye bounding boxes."""
+    if not face.detected or face.landmarks is None:
         return
 
-    # Face mesh
-    _mp_drawing.draw_landmarks(
-        frame,
-        face.face_landmarks,
-        _mp_face_mesh.FACEMESH_TESSELATION,
-        _MESH_TESSELATION_DRAWING,
-        _MESH_CONTOUR_DRAWING,
-    )
+    h, w = frame.shape[:2]
+    lm = face.landmarks
+
+    # Draw face oval contour
+    for start_idx, end_idx in _FACE_OVAL:
+        pt1 = (int(lm[start_idx].x * w), int(lm[start_idx].y * h))
+        pt2 = (int(lm[end_idx].x * w), int(lm[end_idx].y * h))
+        cv2.line(frame, pt1, pt2, (80, 256, 121), 1)
 
     # Iris centres
     if face.left_iris_center:
