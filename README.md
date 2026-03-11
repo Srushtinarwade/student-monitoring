@@ -13,7 +13,7 @@ A real-time AI-based student monitoring system that tracks **eye gaze**, **head 
 | **Head pose** | OpenCV `solvePnP` detects if the student looks away |
 | **Phone detection** | YOLOv8-nano with temporal smoothing avoids false positives |
 | **Beep alerts** | Cross-platform (Windows / macOS / Linux), fires once per distraction event |
-| **Session logging** | Text log with distractions, phone time, focus score & duration |
+| **Session logging** | Text logs and SQLite database (`sessions.db`) tracking distractions, focus score & duration |
 
 ---
 
@@ -49,8 +49,9 @@ student-monitoring/
 |---------------|-------------|
 | `main.py` | The app's entry point. Opens the webcam, runs the detection loop (capture → detect → evaluate focus → alert → render), and prints a session summary on exit. |
 | `config.py` | Stores every tuneable setting (EAR threshold, gaze limits, head pose limits, beep duration, timing windows). Override user-specific values via environment variables (`SM_USERNAME`, `SM_LOG_DIR`, `SM_WEBCAM_INDEX`). |
-| `alerts.py` | Plays a non-blocking beep when distraction is confirmed. Uses `winsound` on Windows, `afplay` on macOS, or a terminal bell on Linux — all through an `AlertManager` class with built-in debouncing. |
-| `session.py` | Tracks per-session metrics (focused frames, distraction count, duration) and writes a text log file with the session summary to the configured log directory. |
+| `alerts.py` | Plays a non-blocking beep when distraction is confirmed (using `winsound`, `afplay`, or terminal bell). |
+| `session.py` | Tracks per-session metrics and writes summaries to both a text log file and the SQLite database. |
+| `database.py` | SQLite database logic for persistent session history used by the web dashboard. |
 | `overlay.py` | Handles all OpenCV drawing: face mesh visualization, iris centre dots, eye bounding boxes, and the on-screen HUD (focus status, phone time, distraction count). |
 | `detectors/` | A package containing the three detection modules: |
 | `detectors/face.py` | Uses MediaPipe FaceMesh to compute the Eye Aspect Ratio (EAR), track blinks vs. drowsiness, detect iris position, and check gaze direction. Returns a `FaceAnalysis` dataclass. |
@@ -68,7 +69,7 @@ student-monitoring/
 4. **Phone detection** — `PhoneDetector` runs YOLOv8 every few frames to check for a phone, with smoothing to avoid false positives
 5. **Focus decision** — The student is considered **focused** only if: eyes are open (not a long closure), gaze is centred, head is facing forward, and no phone is detected
 6. **Alert** — If distraction is sustained for ~1.3 seconds, `AlertManager` plays a beep (once, not repeated). Alert resets after ~0.35 seconds of re-focusing
-7. **Session log** — On quit (`q`), a summary (duration, distractions, phone time, focus score) is printed and saved to disk
+7. **Session log** — On stopping the session, a summary (duration, distractions, phone time, focus score) is saved to the text log and the SQLite database.
 
 ---
 
@@ -103,11 +104,13 @@ pip install -e .
 ### Usage
 
 ```bash
-# Run the monitoring system
-python main.py
+# Start the web dashboard server
+python app.py
 
-# Press 'q' in the OpenCV window to stop
+# Open http://127.0.0.1:5000 in your browser to monitor focus
 ```
+
+*(Alternatively, run the native OpenCV headless script with `python main.py` and press 'q' to stop.)*
 
 ### Configuration
 
@@ -153,9 +156,8 @@ Focus Score: 63.8%
 
 ## 📌 Future Improvements
 
-- Voice alerts using TTS
-- Dashboard / graphs for focus analytics
-- CSV log format for progress tracking
+- Voice alerts using TTS via the browser
+- Advanced historical graphs for focus analytics
 - Multi-student support for classroom mode
 
 ---
@@ -168,4 +170,4 @@ Focus Score: 63.8%
 | Object detection (phone) | [YOLOv8](https://docs.ultralytics.com/) (Ultralytics) |
 | Head pose estimation | OpenCV `solvePnP` |
 | Audio alerts | `winsound` / `afplay` / terminal bell |
-| Session logging | Python `pathlib` + text files |
+| Session logging | Python `pathlib` + SQLite |
