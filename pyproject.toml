@@ -1,0 +1,21 @@
+[project]
+name = "student-monitoring"
+version = "1.0.0"
+description = "Real-time AI-based student monitoring system for focus detection during study sessions"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Srushti Narwade" },
+]
+
+dependencies = [
+    "opencv-python>=4.8.0",
+    "mediapipe>=0.10.0",
+    "ultralytics>=8.0.0",
+    "numpy>=1.24.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
