@@ -84,7 +84,7 @@ def main() -> None:
             focused = False
             if face.detected:
                 hp = head_pose.estimate(
-                    face.face_landmarks.landmark,  # type: ignore[union-attr]
+                    face.landmarks,
                     config.FRAME_WIDTH,
                     config.FRAME_HEIGHT,
                 )
