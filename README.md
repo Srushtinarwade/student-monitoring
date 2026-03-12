@@ -97,7 +97,11 @@ source .venv/bin/activate
 # On Windows:
 # .venv\Scripts\activate
 
-# 3. Install the project
+# 3. Download the required MediaPipe AI Model
+# (This file is required for face and eye tracking to work!)
+curl -sSL -o face_landmarker.task "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+
+# 4. Install the project
 pip install -e .
 ```
 
